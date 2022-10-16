@@ -78,7 +78,8 @@ struct pa_Data
      sf_reverb_state_st *rv;
      sf_sample_st *buffer_in;
      sf_sample_st *buffer_out;
-     sf_sample_st *S3D;
+     sf_sample_st *reverb3Din;
+     sf_sample_st *reverb3Dout;
      quint64 position = 0;
      float G_In = 1;
      float G_Play = 1;
@@ -942,17 +943,7 @@ int MainWindow::Callback(const void *input,
         data->buffer_in[i].R = *in++ * data->G_In;
     }
 
-    // get input buffer and copy it to output in Micro and Recording mode
-    if (Paused) {
-        //for (quint64 i = 0; i < thisRead; i++) {
-            // Copy input to ouput
-            //data->buffer_in[i].L = *in * data->G_In;
-            //data->buffer_in[i].R = *in++ * data->G_In;
-            //bufferInput[i] = data->buffer_in[i].L;
-    //}
-    }
-    else if ((data->mode != Playback) && (data->mode != trackOff)) { // Here is when not playing back this track
-
+    if ((data->mode != Playback) && (data->mode != trackOff)) { // Here is when not playing back this track
         if ((data->mode == Record) && Recording) data->recorded = true;   // set recorded flag if record is active
         for (quint64 i = 0; i < thisRead; i++) {
             // Here is when record is active
@@ -963,7 +954,7 @@ int MainWindow::Callback(const void *input,
             } }
             // when runing record or not (not playing back this track), in any case (record or not)
             // add playback from other tracks if target track is not running, otherwise mix will be added by the mix array
-            if (mixEnabled && data->mixEnabled) {
+            if (mixEnabled && data->mixEnabled && (!Paused)) {
             for (int n=0; n<nbInstru; n++) {
                 float g = 0;
                 if (n == data->myIndex) g = 0;
@@ -985,7 +976,7 @@ int MainWindow::Callback(const void *input,
                     if ((mixEnabled || (n == data->myIndex)) && (pa_data[n].wavRecord != nullptr) && (pa_data[n].mode == Playback) && (pa_data[n].mixEnabled || (n == data->myIndex)))
                     {
                         // add recorded wav of my track when in playback mode
-                        if (n == data->myIndex) {
+                        if (n == data->myIndex && (!Paused)) {
                             float g = pa_data[n].G_Play;
                                 data->buffer_in[i].L += data->wavRecord[(data->position) + i] * g;
                                 data->buffer_in[i].R = data->buffer_in[i].L;
@@ -993,13 +984,10 @@ int MainWindow::Callback(const void *input,
                         else {
                             // add other tracks recorded wav when in playback mode, but only if tracks are not in runing mode
                             // meaning no outpur device is selected
-                            if(!pa_data[n].runing) {
+                            if(!pa_data[n].runing && (!Paused)) {
                                     float g = pa_data[n].mixGain[data->myIndex];
                                     data->buffer_in[i].L += pa_data[n].wavRecord[(data->position) + i] * g;
                                     data->buffer_in[i].R = data->buffer_in[i].L; } } } } } }
-    // process reverb to input buffer
-    if (data->mode != trackOff) sf_reverb_process(data->rv, intFrameCount , data->buffer_in, data->buffer_out);
-
     //CMonoBuffer<float> buffer3D(thisRead);
     data->buffer3D.Fill(thisRead, 0);
     for (quint64 i = 0; i < thisRead; i++) { data->buffer3D[i] = data->buffer_in[i].L; }
@@ -1007,9 +995,18 @@ int MainWindow::Callback(const void *input,
         data->A3DSource->SetBuffer(data->buffer3D);
         data->A3DSource->ProcessAnechoic(data->buffer3DProcessed.left, data->buffer3DProcessed.right);
         if (data->reverb3D) {
-            data->environment->ProcessVirtualAmbisonicReverb(data->buffer3DReverb.left, data->buffer3DReverb.right);
+            data->environment->ProcessVirtualAmbisonicReverb(data->buffer3DReverb.left, data->buffer3DReverb.right); }
+            else if (data->reverb) {
+            data->buffer3DReverb.left.Fill(thisRead, 0);
+            data->buffer3DReverb.right.Fill(thisRead, 0);
+                for (quint64 i = 0; i < thisRead; i++) {
+                data->reverb3Din[i].L = data->buffer3DProcessed.left[i];
+                data->reverb3Din[i].R = data->buffer3DProcessed.right[i]; }
+                sf_reverb_process(data->rv, intFrameCount , data->reverb3Din, data->reverb3Dout);
         }
     }
+    // process reverb to input buffer
+    else if (data->mode != trackOff) sf_reverb_process(data->rv, intFrameCount , data->buffer_in, data->buffer_out);
     data->buffer3D.clear();
     // Create new frames and copy one new frame to each other tracks with apropriate gain
     // if mix enabled copy input buffer to all other output mix matrix with its specific gain
@@ -1025,7 +1022,13 @@ int MainWindow::Callback(const void *input,
                         mix->frame[i].R = data->buffer3DProcessed.right[i] * data->mixGain[n];
                         if (data->reverb3D) {
                             mix->frame[i].L += data->buffer3DReverb.left[i];
-                            mix->frame[i].R += data->buffer3DReverb.right[i]; } } }
+                            mix->frame[i].R += data->buffer3DReverb.right[i];
+                        }
+                        else if (data->reverb) {
+                            mix->frame[i].L += data->reverb3Dout[i].L;
+                            mix->frame[i].R += data->reverb3Dout[i].R;
+                        }
+                    } }
                 else {
                     for (quint64 i = 0; i < thisRead; i++) {
                         mix->frame[i].L = data->buffer_in[i].L * data->mixGain[n];
@@ -1048,14 +1051,14 @@ int MainWindow::Callback(const void *input,
                 float L = 0;
                 float R = 0;
                 if (!data->reverbOnly) {
+                    if (data->sound3D && sound3DActive && (thisRead == FRAME_SIZE)) {
+                        L = data->buffer3DProcessed.left[i];
+                        R = data->buffer3DProcessed.right[i]; }
+                    else {
                     L = data->buffer_in[i].L;
-                    R = data->buffer_in[i].R;
+                    R = data->buffer_in[i].R; }
                 }
-                //if (data->sound3D && sound3DActive) {
-                    //L = bufferProcessed.left[i];
-                    //R = bufferProcessed.right[i];
-                //}
-            // Mix all other tracks to hear others even when paused
+                // Mix all other tracks to hear others even when paused
             for (int n = 0; n < nbInstru; n++) {
                 if (n != data->myIndex) {
                     if (!mix_track_Hor_Vert[n][data->myIndex].mix_send_list.isEmpty()) {
@@ -1065,7 +1068,15 @@ int MainWindow::Callback(const void *input,
                 if (data->buffer_in[i].L > data->levelLeft) data->levelLeft = data->buffer_in[i].L;
                 if (data->buffer_in[i].R > data->levelRight) data->levelRight = data->buffer_in[i].R;
             // set the output
-                if (data->reverb) {
+                if (data->sound3D && sound3DActive && (thisRead == FRAME_SIZE)) {
+                    if (data->reverb3D) {
+                    *cursor++ = L + (data->buffer3DReverb.left[i] * data->G_RevLev);
+                    *cursor++ = R + (data->buffer3DReverb.right[i] * data->G_RevLev); }
+                    else {
+                        *cursor++ = (L + (data->reverb3Dout[i].L * data->G_RevLev));
+                        *cursor++ = (R + (data->reverb3Dout[i].R * data->G_RevLev));
+                    }
+                } else if (data->reverb) {
                     *cursor++ = (L + (data->buffer_out[i].L * data->G_RevLev));
                     *cursor++ = (R + (data->buffer_out[i].R * data->G_RevLev));
                 }
@@ -1098,9 +1109,16 @@ int MainWindow::Callback(const void *input,
             R += data->buffer3DProcessed.right[i];
             if (data->reverb3D) {
                 L += data->buffer3DReverb.left[i] * data->G_RevLev;
-                R += data->buffer3DReverb.right[i] * data->G_RevLev; }
+                R += data->buffer3DReverb.right[i] * data->G_RevLev;
+            }
+            else if (data->reverb) {
+                L += data->reverb3Dout[i].L * data->G_RevLev;
+                R += data->reverb3Dout[i].R * data->G_RevLev;
+            }
         }
         else {
+            L += (data->buffer_in[i].L * data->G_In);
+            R += (data->buffer_in[i].R) * data->G_In;
             if (data->reverb) {
                 L += (data->buffer_out[i].L * data->G_RevLev);
                 R += (data->buffer_out[i].R) * data->G_RevLev; }
@@ -2147,6 +2165,8 @@ void MainWindow::playNow()
         sf_presetreverb(pa_data[n].rv, sfInfo.samplerate, SF_REVERB_PRESET_DEFAULT);
         pa_data[n].buffer_in = new sf_sample_st[FRAME_SIZE];
         pa_data[n].buffer_out = new sf_sample_st[FRAME_SIZE];
+        pa_data[n].reverb3Din = new sf_sample_st[FRAME_SIZE];
+        pa_data[n].reverb3Dout = new sf_sample_st[FRAME_SIZE];
         pa_data[n].frames = Frames;
         pa_data[n].levelLeft = 0;
         pa_data[n].levelRight = 0;
@@ -2313,6 +2333,8 @@ void MainWindow::stop()
             FtpUpload[n]->setEnabled(true); }
         if (pa_data[n].buffer_in) { delete[] pa_data[n].buffer_in; pa_data[n].buffer_in = nullptr; }
         if (pa_data[n].buffer_out) { delete[] pa_data[n].buffer_out; pa_data[n].buffer_out = nullptr; }
+        if (pa_data[n].reverb3Din) { delete[] pa_data[n].reverb3Din; pa_data[n].reverb3Din = nullptr; }
+        if (pa_data[n].reverb3Dout) { delete[] pa_data[n].reverb3Dout; pa_data[n].reverb3Dout = nullptr; }
         pa_data[n].runing = false;
     }
     ui->buttonRecord->setEnabled(rec);
