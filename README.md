@@ -7,11 +7,11 @@ Remyxer is dedicated to musician work, and use mulitple USB audio input/output d
 
 It is supposed to act like a recording studio but more oriented to musician work.
 
-One input/ouput per musician to capture it own sound and play it in real time to the headphone.
+One input/ouput per musician to capture its own sound from the microphone input and play it in real time to the headphone, mixed with the main audio track.
 
 Remyxer add a wav file during real time sound operating from the input (microphne) to the output (headphones).
 
-The musician can play along with the wav sound track will hearing it own sound from the microphone.
+The musician can play along with the wav sound track while hearing its own sound from the microphone.
 
 Remyxer can handle several USB interfaces, one per musician.
 
