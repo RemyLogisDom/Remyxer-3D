@@ -73,13 +73,14 @@ mix_track_list mix_track_Hor_Vert[nbInstruMax][nbInstruMax];
 
 struct pa_Data
 {
-     quint64 frames;
-     float *wavRecord;
-     sf_reverb_state_st *rv;
-     sf_sample_st *buffer_in;
-     sf_sample_st *buffer_out;
-     sf_sample_st *reverb3Din;
-     sf_sample_st *reverb3Dout;
+     quint64 frames = 0;
+     quint64 thisRead = 0;
+     float *wavRecord = nullptr;
+     sf_reverb_state_st *rv = nullptr;
+     sf_sample_st *buffer_in = nullptr;
+     sf_sample_st *buffer_out = nullptr;
+     sf_sample_st *reverb3Din = nullptr;
+     sf_sample_st *reverb3Dout = nullptr;
      quint64 position = 0;
      float G_In = 1;
      float G_Play = 1;
@@ -96,8 +97,8 @@ struct pa_Data
      bool reverb = true;
      bool recorded = false;
      int myIndex = -1;
-     int *mix_send_Vol;
-     float *G_mix_send;
+     int *mix_send_Vol = nullptr;
+     float *G_mix_send = nullptr;
      float mixGain[nbInstruMax];
      QVector <mix_frame*> mix_del_list;
      bool runing = false;
@@ -186,7 +187,7 @@ offLineMixer *offLineMixers[nbInstruMax];
 
 #define positionBegin loop_begin
 #define positionEnd loop_end
-#define title "Remyxer 1.08"
+#define title "Remyxer 1.09"
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWindow)
 {
@@ -913,14 +914,15 @@ int MainWindow::Callback(const void *input,
     float *in = (float *)input;
     float *out = (float *)output;
     quint64 intFrameCount = frameCount;
-    quint64 thisRead;
+    //quint64 thisRead;
     cursor = out; /* set the output cursor to the beginning */
 
     /* are we going to read past the end of the file?*/
     if (intFrameCount > (data->frames - data->position))
     {
         /*if we are, only read to the end of the file*/
-        thisRead = data->frames - data->position;
+        data->thisRead = data->frames - data->position;
+        //qDebug() << QString("End : thisRead = %1").arg(thisRead);
         /* and then loop to the beginning of the file */
         data->position = 0;
         Paused = true;
@@ -929,15 +931,15 @@ int MainWindow::Callback(const void *input,
     else
     {
         /* otherwise, we'll just fill up the rest of the output buffer */
-        thisRead = intFrameCount;
+        data->thisRead = intFrameCount;
         /* and increment the file position */
-        if (!Paused) data->position += thisRead;
+        if (!Paused) data->position += data->thisRead;
     }
 
     // remove old mix frames
     while (data->mix_del_list.count() > 100) { delete data->mix_del_list.takeFirst(); }
 
-    for (quint64 i = 0; i < thisRead; i++) {
+    for (quint64 i = 0; i < data->thisRead; i++) {
         // Copy input to ouput
         data->buffer_in[i].L = *in * data->G_In;
         data->buffer_in[i].R = *in++ * data->G_In;
@@ -945,12 +947,12 @@ int MainWindow::Callback(const void *input,
 
     if ((data->mode != Playback) && (data->mode != trackOff)) { // Here is when not playing back this track
         if ((data->mode == Record) && Recording) data->recorded = true;   // set recorded flag if record is active
-        for (quint64 i = 0; i < thisRead; i++) {
+        for (quint64 i = 0; i < data->thisRead; i++) {
             // Here is when record is active
             if ((data->mode == Record) && Recording) {
             if ((loopRecord && (data->position > loop_begin) && (data->position < loop_end)) || !loopRecord) {
             // Copy input to wav array
-            data->wavRecord[(data->position) + i] = data->buffer_in[i].L * data->G_Rec;
+            data->wavRecord[data->position + i] = data->buffer_in[i].L * data->G_Rec;
             } }
             // when runing record or not (not playing back this track), in any case (record or not)
             // add playback from other tracks if target track is not running, otherwise mix will be added by the mix array
@@ -967,18 +969,18 @@ int MainWindow::Callback(const void *input,
     else {
         // Here it is when playback mode for this track is selected
         // playback wav of other tracks if wav was recorded
-        for (quint64 i = 0; i < thisRead; i++) {
+        for (quint64 i = 0; i < data->thisRead; i++) {
             data->buffer_in[i].L = 0;
             data->buffer_in[i].R = 0; }
             // add playback from All tracks
             for (int n=0; n<nbInstru; n++) {
-                for (quint64 i = 0; i < thisRead; i++) {
+                for (quint64 i = 0; i < data->thisRead; i++) {
                     if ((mixEnabled || (n == data->myIndex)) && (pa_data[n].wavRecord != nullptr) && (pa_data[n].mode == Playback) && (pa_data[n].mixEnabled || (n == data->myIndex)))
                     {
                         // add recorded wav of my track when in playback mode
                         if (n == data->myIndex && (!Paused)) {
                             float g = pa_data[n].G_Play;
-                                data->buffer_in[i].L += data->wavRecord[(data->position) + i] * g;
+                                data->buffer_in[i].L += data->wavRecord[data->position + i] * g;
                                 data->buffer_in[i].R = data->buffer_in[i].L;
                         }
                         else {
@@ -986,20 +988,20 @@ int MainWindow::Callback(const void *input,
                             // meaning no outpur device is selected
                             if(!pa_data[n].runing && (!Paused)) {
                                     float g = pa_data[n].mixGain[data->myIndex];
-                                    data->buffer_in[i].L += pa_data[n].wavRecord[(data->position) + i] * g;
+                                    data->buffer_in[i].L += pa_data[n].wavRecord[data->position + i] * g;
                                     data->buffer_in[i].R = data->buffer_in[i].L; } } } } } }
     //CMonoBuffer<float> buffer3D(thisRead);
-    data->buffer3D.Fill(thisRead, 0);
-    for (quint64 i = 0; i < thisRead; i++) { data->buffer3D[i] = data->buffer_in[i].L; }
-    if (data->sound3D && sound3DActive && (thisRead == FRAME_SIZE)) {
+    data->buffer3D.Fill(data->thisRead, 0);
+    for (quint64 i = 0; i < data->thisRead; i++) { data->buffer3D[i] = data->buffer_in[i].L; }
+    if (data->sound3D && sound3DActive && (data->thisRead == FRAME_SIZE)) {
         data->A3DSource->SetBuffer(data->buffer3D);
         data->A3DSource->ProcessAnechoic(data->buffer3DProcessed.left, data->buffer3DProcessed.right);
         if (data->reverb3D) {
             data->environment->ProcessVirtualAmbisonicReverb(data->buffer3DReverb.left, data->buffer3DReverb.right); }
             else if (data->reverb) {
-            data->buffer3DReverb.left.Fill(thisRead, 0);
-            data->buffer3DReverb.right.Fill(thisRead, 0);
-                for (quint64 i = 0; i < thisRead; i++) {
+            data->buffer3DReverb.left.Fill(data->thisRead, 0);
+            data->buffer3DReverb.right.Fill(data->thisRead, 0);
+                for (quint64 i = 0; i < data->thisRead; i++) {
                 data->reverb3Din[i].L = data->buffer3DProcessed.left[i];
                 data->reverb3Din[i].R = data->buffer3DProcessed.right[i]; }
                 sf_reverb_process(data->rv, intFrameCount , data->reverb3Din, data->reverb3Dout);
@@ -1016,8 +1018,8 @@ int MainWindow::Callback(const void *input,
             if (pa_data[n].runing) {
                 if (mix_track_Hor_Vert[data->myIndex][n].mix_send_list.count() < 200) {
                 mix_frame *mix = new mix_frame;
-                if (data->sound3D && sound3DActive && (thisRead == FRAME_SIZE)) {
-                    for (quint64 i = 0; i < thisRead; i++)  {
+                if (data->sound3D && sound3DActive && (data->thisRead == FRAME_SIZE)) {
+                    for (quint64 i = 0; i < data->thisRead; i++)  {
                         mix->frame[i].L = data->buffer3DProcessed.left[i] * data->mixGain[n];
                         mix->frame[i].R = data->buffer3DProcessed.right[i] * data->mixGain[n];
                         if (data->reverb3D) {
@@ -1030,7 +1032,7 @@ int MainWindow::Callback(const void *input,
                         }
                     } }
                 else {
-                    for (quint64 i = 0; i < thisRead; i++) {
+                    for (quint64 i = 0; i < data->thisRead; i++) {
                         mix->frame[i].L = data->buffer_in[i].L * data->mixGain[n];
                         mix->frame[i].R = data->buffer_in[i].R * data->mixGain[n];
                     }
@@ -1042,16 +1044,16 @@ int MainWindow::Callback(const void *input,
     if (Paused) {
         // Get input buffer
         if (data->mode == trackOff) {
-            for (quint64 i = 0; i < thisRead; i++) {
+            for (quint64 i = 0; i < data->thisRead; i++) {
             // set the output
             *cursor++ = 0;
             *cursor++ = 0; }
         } else {
-            for (quint64 i = 0; i < thisRead; i++) {
+            for (quint64 i = 0; i < data->thisRead; i++) {
                 float L = 0;
                 float R = 0;
                 if (!data->reverbOnly) {
-                    if (data->sound3D && sound3DActive && (thisRead == FRAME_SIZE)) {
+                    if (data->sound3D && sound3DActive && (data->thisRead == FRAME_SIZE)) {
                         L = data->buffer3DProcessed.left[i];
                         R = data->buffer3DProcessed.right[i]; }
                     else {
@@ -1068,7 +1070,7 @@ int MainWindow::Callback(const void *input,
                 if (data->buffer_in[i].L > data->levelLeft) data->levelLeft = data->buffer_in[i].L;
                 if (data->buffer_in[i].R > data->levelRight) data->levelRight = data->buffer_in[i].R;
             // set the output
-                if (data->sound3D && sound3DActive && (thisRead == FRAME_SIZE)) {
+                if (data->sound3D && sound3DActive && (data->thisRead == FRAME_SIZE)) {
                     if (data->reverb3D) {
                     *cursor++ = L + (data->buffer3DReverb.left[i] * data->G_RevLev);
                     *cursor++ = R + (data->buffer3DReverb.right[i] * data->G_RevLev); }
@@ -1095,16 +1097,25 @@ int MainWindow::Callback(const void *input,
     // This section handle the main wav file sound and add the mixed data
     // if track is off, zero the buffer
     if (data->mode == trackOff) {
-        for (quint64 i = 0; i < thisRead; i++) {
+        for (quint64 i = 0; i < data->thisRead; i++) {
     // set the output
         *cursor++ = 0;
         *cursor++ = 0; }
     } else {
     // if track is not off, add wav file to output
-    for (quint64 i = 0; i < thisRead; i++) {
-        float L = wav_st[data->position + i].L * data->G_Wav * !muteState;
-        float R = wav_st[data->position + i].R * data->G_Wav * !muteState;
-        if (data->sound3D && sound3DActive && (thisRead == FRAME_SIZE)) {
+    for (quint64 i = 0; i < data->thisRead; i++) {
+        float L = 0;
+        float R = 0;
+        if ((data->position + i) <Frames) {
+        //float L = wav_st[data->position + i].L * data->G_Wav * !muteState;
+        //float R = wav_st[data->position + i].R * data->G_Wav * !muteState;
+        L = wav_st[data->position + i].L * data->G_Wav * !muteState;
+        R = wav_st[data->position + i].R * data->G_Wav * !muteState;
+        }
+        else {
+            qDebug() << QString("Frames = %1, position = %2 i = %3").arg(Frames).arg(data->position + i).arg(i);
+        }
+        if (data->sound3D && sound3DActive && (data->thisRead == FRAME_SIZE)) {
             L += data->buffer3DProcessed.left[i];
             R += data->buffer3DProcessed.right[i];
             if (data->reverb3D) {
@@ -1157,7 +1168,7 @@ int MainWindow::Callback(const void *input,
             while (mix_track_Hor_Vert[n][data->myIndex].mix_send_list.count() > 100) mix_track_Hor_Vert[n][data->myIndex].mix_send_list.removeFirst();
     }
 
-    if (data->handle3DMix && mixEnabled && sound3DActive && (thisRead == FRAME_SIZE)) {
+    if (data->handle3DMix && mixEnabled && sound3DActive && (data->thisRead == FRAME_SIZE)) {
         for (int n=0; n<nbInstru; n++) {
             if (n != data->myIndex) {
             // Conditions : Track not runing (no device output), it must have 3D sound active, being in Playbackmode, have wav data and mixer enabled
