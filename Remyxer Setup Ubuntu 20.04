@@ -1,0 +1,16 @@
+sudo apt update
+sudo apt install libportaudio2
+sudo apt install libnetcdf-dev
+sudo apt-get install libxcb-xinerama0
+
+pour lancer depuis un terminal
+
+export LD_LIBRARY_PATH="/home/remy/Remyxer/lib"
+./Remyxer
+
+
+pour ajouter dans le launcher
+
+sudo cp remyxer.desktop /usr/share/applications
+echo /home/remy/Remyxer/lib | sudo tee /etc/ld.so.conf.d/qt5.conf
+sudo ldconfig
