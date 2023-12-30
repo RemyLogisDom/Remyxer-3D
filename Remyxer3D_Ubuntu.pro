@@ -1,3 +1,11 @@
+# Compile Ubuntu 18.10 Qt 5.12.10 sudo apt-get install libgl-dev
+# install portaudio sudo apt install libportaudio2
+# install netcfd sudo apt install libnetcdf-dev
+# install sndfile lib apt-get install libsndfile-dev
+# to run Qt sudo apt-get install libxcb-xinerama0
+# https://github.com/hluk/qxtglobalshortcut
+# https://www.executionunit.com/blog/2014/03/21/grabbing-keyboard-input-in-qt/
+
 QT += core gui multimedia widgets
 
 INCLUDEPATH += $$PWD/include
@@ -14,6 +22,7 @@ include (netcdf.pri)
 unix {
 LIBS += -lportaudio -L/lib
 LIBS += -lsndfile -L/lib
+LIBS += -lasound
 }
 
 TARGET = Remyxer

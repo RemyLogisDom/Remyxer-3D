@@ -187,7 +187,8 @@ offLineMixer *offLineMixers[nbInstruMax];
 
 #define positionBegin loop_begin
 #define positionEnd loop_end
-#define title "Remyxer 1.09"
+#define title "Remyxer 1.11"
+
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWindow)
 {
@@ -558,6 +559,7 @@ void MainWindow::newDevice()
 
     reverbOnly[index] = new QCheckBox;
     reverbOnly[index]->setText("Reverb only");
+    reverbOnly[index]->setFocusPolicy(Qt::NoFocus);
     ui->gridLayout->addWidget(reverbOnly[index], index*2+1, x++, 1, 1);
     connect(reverbOnly[index], SIGNAL(stateChanged(int)), this, SLOT(reverbOnlyChanged(int)));
 
@@ -565,12 +567,16 @@ void MainWindow::newDevice()
     sound3D[index]->setText("Sound 3D");
     ui->gridLayout->addWidget(sound3D[index], index*2+1, x++, 1, 1);
     sound3D[index]->setEnabled(sound3DActive);
+    sound3D[index]->setFocusPolicy(Qt::NoFocus);
+    if (!sound3DActive) sound3D[index]->setToolTip(tr("Please load a 3D sound profile file"));
     connect(sound3D[index], QOverload<int>::of(&QCheckBox::stateChanged), [=] { sound3DChanged( sound3D[index] );  } );
 
     reverb3D[index] = new QCheckBox;
     reverb3D[index]->setText("Reverb 3D");
     ui->gridLayout->addWidget(reverb3D[index], index*2+1, x++, 1, 1);
     reverb3D[index]->setEnabled(sound3DActive);
+    reverb3D[index]->setFocusPolicy(Qt::NoFocus);
+    if (!sound3DActive) reverb3D[index]->setToolTip(tr("Please load a 3D reverb file"));
     connect(reverb3D[index], QOverload<int>::of(&QCheckBox::stateChanged), [=] { reverb3DChanged( reverb3D[index] );  } );
 
     xPos[index] = new QDoubleSpinBox(ui->groupBox);
@@ -889,6 +895,7 @@ void MainWindow::saveConfig()
 void MainWindow::chooseFile()
 {
     setFocus();
+    if (Runing) { ONOFF(); }
     QString name = QFileDialog::getOpenFileName(this, tr("Open files"),  QString(QDir(fileName).path()), tr("Audio Files (*.wav)"));
     if (!name.isEmpty()) setFile(name);
 }
@@ -1221,7 +1228,7 @@ void MainWindow::play()
         ui->buttonPlay->setChecked(false);
         return; }
     setFocus();
-    if (!Runing) { return; }
+    if (!Runing) { ONOFF(); }
     if (!Recording) Paused = !Paused;
     if (Paused) {
         Recording = false;
@@ -1336,7 +1343,7 @@ void MainWindow::ON()
         FtpUpload[n]->setEnabled(false);
     }
     if (none) return;
-    ui->buttonLoad->setEnabled(false);
+    //ui->buttonLoad->setEnabled(false);
     ui->comboBoxRecentFiles->setEnabled(false);
     ui->buttonSave->setEnabled(false);
     ui->radioButton44->setEnabled(false);
@@ -1364,7 +1371,7 @@ void MainWindow::OFF()
     ui->buttonHP->setChecked(false);
     ui->buttonHP->setEnabled(false);
 
-    ui->buttonLoad->setEnabled(true);
+    //ui->buttonLoad->setEnabled(true);
     ui->buttonRewind->setEnabled(false);
     ui->buttonPlay->setEnabled(false);
     ui->buttonRecord->setEnabled(false);
@@ -1504,7 +1511,8 @@ void MainWindow::chooseHTRF()
     if (!name.isEmpty()) {
         if (QFile::exists(name)) { sound3DActive = true;
         for (int n=0; n<nbInstru; n++) {
-            HRTF::CreateFrom3dti(name.toStdString(), pa_data[n].listener); }
+            HRTF::CreateFrom3dti(name.toStdString(), pa_data[n].listener);
+            sound3D[n]->setToolTip(""); }
         } else sound3DActive = false;
     }
 }
@@ -1514,10 +1522,15 @@ void MainWindow::chooseRoomReverb()
 {
     QString name = QFileDialog::getOpenFileName(this, tr("Open files"), "", tr("Room Reverb Files (*.sofa)"));
     if (!name.isEmpty()) {
-        if (QFile::exists(name)) { sound3DActive = true;
-        for (int n=0; n<nbInstru; n++) {
-            BRIR::CreateFromSofa(name.toStdString(), pa_data[n].environment);  }
-        } else sound3DActive = false;
+        if (QFile::exists(name)) {
+            sound3DActive = true;
+            for (int n=0; n<nbInstru; n++) {
+                BRIR::CreateFromSofa(name.toStdString(), pa_data[n].environment);
+                reverb3D[n]->setToolTip("");
+            }
+        } else {
+            sound3DActive = false;
+        }
     }
 }
 
@@ -1853,7 +1866,7 @@ int64_t MainWindow::loadWavFile(QString fileName, float *&wavSound, bool &conver
 void MainWindow::gen_metronome()
 {
     bool ok;
-    int bpm = QInputDialog::getInt(this, tr("BPM"), tr("BPM :"), 120, 50, 280, 1, &ok);
+    int bpm = QInputDialog::getInt(this, tr("BPM"), tr("BPM :"), 120, 50, 360, 1, &ok);
     if (!ok) return;
     //int t = QInputDialog::getInt(this, tr("Durée"), tr("Durée en secondes :"), 300, 1, 3600, 1, &ok);
     int nbMesure = QInputDialog::getInt(this, tr("Durée"), tr("Nombre de mesure :"), 20, 1, 999, 1, &ok);
@@ -1867,27 +1880,50 @@ tryAgain:
     QFileInfo fileInfo(ticFileName);
     file.open(QIODevice::ReadOnly);
     QString startSequence = file.readLine();
+    while (startSequence.startsWith("#")) startSequence = file.readLine();
     if (startSequence.count() < 1) {
         QMessageBox msgBox;
         msgBox.setText("Start sequence error");
         msgBox.setInformativeText("Start sequence is too small");
         msgBox.setStandardButtons(QMessageBox::Cancel);
+        msgBox.exec();
         return;
     }
     //qDebug() << "Start sequence : " + startSequence;
     QString data = file.readAll();
-    QStringList list = data.split("\n");
+    QStringList getList = data.split("\n");
+    QStringList list;
+    // remove last /n from the file
+    foreach (QString str, getList) { if (!str.isEmpty() ) { list.append(str);
+        //qDebug() << "add : " + str;
+        }
+    }
     QStringList wavFilelist;
     foreach (QString str, list) {
-        if (!str.isEmpty()) wavFilelist.append(fileInfo.absolutePath() + QDir::separator() + str);
+        //qDebug() << "read wav : " + str;
+        if (!str.startsWith("#")) {
+            QString file = fileInfo.absolutePath() + QDir::separator() + str;
+            if (str.contains("*")) wavFilelist.append("*");
+            else if (QFile::exists(file)) wavFilelist.append(file);
+            else {
+                QMessageBox msgBox;
+                msgBox.setText("Files does not exists");
+                msgBox.setInformativeText("file found : " + file);
+                msgBox.setStandardButtons(QMessageBox::Cancel);
+                msgBox.exec();
+                return;
+        } }
     }
     if (wavFilelist.count() == 0) {
         QMessageBox msgBox;
         msgBox.setText("Files missng");
         msgBox.setInformativeText("No wav file found");
         msgBox.setStandardButtons(QMessageBox::Cancel);
+        msgBox.exec();
         return;
     }
+    //qDebug() << "gogo";
+
     // open all wav files
     float *wavFiles[wavFilelist.count()];
     int64_t wavFilesSize[wavFilelist.count()];
@@ -1895,23 +1931,25 @@ tryAgain:
     for (int n=0; n<wavFilelist.count(); n++) {
         //qDebug() << "Open file : " + wavFilelist[n];
         wavFiles[n] = nullptr;
-        wavFilesSize[n] = loadWavFile(wavFilelist[n], wavFiles[n], converted);
-        // check if sound file was loaded
-        if (wavFiles[n] == nullptr) {
-            QMessageBox msgBox;
-            msgBox.setText("Can't load file : " + wavFilelist[n]);
-            msgBox.setStandardButtons(QMessageBox::Abort);
-            msgBox.exec();
-            return; }
-        // check if sound file is too long
-        if (wavFilesSize[n] > (SAMPLE_RATE / 2)) {
-            QMessageBox msgBox;
-            msgBox.setText("File is too long " + wavFilelist[n]);
-            msgBox.setInformativeText("You must choose a shorter file");
-            msgBox.setStandardButtons(QMessageBox::Ok | QMessageBox::Cancel);
-            msgBox.setDefaultButton(QMessageBox::Cancel);
-            if (msgBox.exec() == QMessageBox::Cancel) return;
-            goto tryAgain; }
+        if (wavFilelist.at(n) != "*") {
+            wavFilesSize[n] = loadWavFile(wavFilelist[n], wavFiles[n], converted);
+            // check if sound file was loaded
+            if (wavFiles[n] == nullptr) {
+                QMessageBox msgBox;
+                msgBox.setText("Can't load file : " + wavFilelist[n]);
+                msgBox.setStandardButtons(QMessageBox::Abort);
+                msgBox.exec();
+                return; }
+            // check if sound file is too long
+            if (wavFilesSize[n] > (SAMPLE_RATE / 2)) {
+                QMessageBox msgBox;
+                msgBox.setText("File is too long " + wavFilelist[n]);
+                msgBox.setInformativeText("You must choose a shorter file");
+                msgBox.setStandardButtons(QMessageBox::Ok | QMessageBox::Cancel);
+                msgBox.setDefaultButton(QMessageBox::Cancel);
+                if (msgBox.exec() == QMessageBox::Cancel) return;
+                goto tryAgain; }
+        }
     }
 nameAgain:
     QString text = QInputDialog::getText(this, tr("Metronome sound file"), tr("Choose a sound file :"), QLineEdit::Normal, "Sound file", &ok);
@@ -1938,9 +1976,10 @@ nameAgain:
     int64_t offest = (startSequence.count() - 1) * sampleClic * 2;
     for (int mesure=0; mesure<nbMesure; mesure++) {
         for (int t=0; t<wavFilelist.count(); t++) {
+            if (wavFiles[t] != nullptr) {
             for (int64_t i=0; i<wavFilesSize[t]; i++) {
                 wav_st[(((mesure * wavFilelist.count() ) + t) * sampleClic * 2) + i + offest] = wavFiles[t][i];
-            } } }
+            } } } }
     SF_INFO sfinfo ;
     sfinfo.channels = 2;
     sfinfo.samplerate = SAMPLE_RATE;
@@ -2316,7 +2355,7 @@ void MainWindow::stop()
         ui->labelTime->setText(QString("%1:%2:%3").arg(m, 2, 10, QChar('0')).arg(s%60, 2, 10, QChar('0')).arg(c%100, 2, 10, QChar('0')));
         for (int n=0; n<nbInstru; n++) pa_data[n].position = 0;
         ui->buttonRecord->setEnabled(false);
-        ui->buttonLoad->setEnabled(true);
+        //ui->buttonLoad->setEnabled(true);
         ui->comboBoxRecentFiles->setEnabled(true);
         ui->buttonSave->setEnabled(true);
         ui->radioButton44->setEnabled(true);
@@ -2349,7 +2388,7 @@ void MainWindow::stop()
         pa_data[n].runing = false;
     }
     ui->buttonRecord->setEnabled(rec);
-    ui->buttonLoad->setEnabled(true);
+    //ui->buttonLoad->setEnabled(true);
     ui->comboBoxRecentFiles->setEnabled(true);
     ui->buttonSave->setEnabled(true);
     ui->radioButton44->setEnabled(true);
