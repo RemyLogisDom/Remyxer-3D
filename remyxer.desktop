@@ -1,0 +1,13 @@
+[Desktop Entry]
+Encoding=UTF-8
+Version=1.0.9
+Type=Application
+Name=Remyxer-3D
+Icon=/home/remy/remyxer/mixer.png
+Path=/home/remy/remyxer
+Exec=/home/remy/remyxer/Remyxer
+Comment=Work your instrument
+Categories=Utility;Application;Development;
+
+
+
