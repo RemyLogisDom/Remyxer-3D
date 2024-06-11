@@ -64,7 +64,7 @@ struct mix_track_list
     QVector <mix_frame*> mix_send_list; // List of sample populated by different tracks, read back for cross mix
                                          // When input buffer is available (or recorded wav if read back is selected instead of live sound)
                                          // one pointer mix_send is created, sound is copied to the array with send gain, destination track will have to read it and delete it from the list
-                                         // if input buffer arrives before array an been read and taken, new pointer is created and added to the list
+                                         // if input buffer arrives before array as been read and taken, new pointer is created and added to the list
                                          // List of sample populated by different tracks, read back for cross mix
 };
 
@@ -145,40 +145,60 @@ class offLineMixer : public QThread
 public:
     pa_Data *data;
     quint64 position;
+    sf_sample_st *buffer_mix_in = nullptr;
+    sf_sample_st *buffer_mix_out = nullptr;
     offLineMixer(pa_Data *d)
     {
         data = d;
+        buffer_mix_in = new sf_sample_st[FRAME_SIZE];
+        buffer_mix_out = new sf_sample_st[FRAME_SIZE];
     }
     void run()
     {
         float g = data->G_Play;
-        data->buffer3D.Fill(FRAME_SIZE, 0);
-        for (quint64 i = 0; i < FRAME_SIZE; i++) { data->buffer3D[i] = data->wavRecord[(position) + i] * g; }
         // perform 3D Process
+        if (data->sound3D)
+        {
+            data->buffer3D.Fill(FRAME_SIZE, 0);
+            for (quint64 f = 0; f < FRAME_SIZE; f++) { data->buffer3D[f] = data->wavRecord[(position) + f] * g; }
             data->A3DSource->SetBuffer(data->buffer3D);
             data->A3DSource->ProcessAnechoic(data->buffer3DProcessed.left, data->buffer3DProcessed.right);
             if (data->reverb3D) {
                 data->environment->ProcessVirtualAmbisonicReverb(data->buffer3DReverb.left, data->buffer3DReverb.right);
             }
             data->buffer3D.clear();
-            for (int i=0; i<nbInstru; i++) {
-                if (i != data->myIndex) {
-            // check all tracks except this one
+        }
+        else {
+            for (quint64 f = 0; f < FRAME_SIZE; f++) { buffer_mix_in[f].L = data->wavRecord[(position) + f] * g;
+                buffer_mix_in[f].R = buffer_mix_in[f].L; }
+        }
+        for (int i=0; i<nbInstru; i++) {
+            if (i != data->myIndex) {
+                // check all tracks except this one
                 // Traget track must be runing
                 if ((pa_data[i].runing) && (mix_track_Hor_Vert[data->myIndex][i].mix_send_list.count() < 200)) {
                     mix_frame *mix = new mix_frame;
                     for (quint64 f = 0; f < FRAME_SIZE; f++) {
-                        mix->frame[f].L = data->buffer3DProcessed.left[f] * data->mixGain[i];
-                        mix->frame[f].R = data->buffer3DProcessed.right[f] * data->mixGain[i];
-                        if (data->reverb3D) {
-                            mix->frame[f].L += data->buffer3DReverb.left[f];
-                            mix->frame[f].R += data->buffer3DReverb.right[f]; }
+                        if (data->sound3D) {
+                            mix->frame[f].L = data->buffer3DProcessed.left[f] * data->mixGain[i];
+                            mix->frame[f].R = data->buffer3DProcessed.right[f] * data->mixGain[i];
+                            if (data->reverb3D) {
+                                mix->frame[f].L += data->buffer3DReverb.left[f];
+                                mix->frame[f].R += data->buffer3DReverb.right[f];
+                            }
+                        }
+                        else {
+                            mix->frame[f].L = buffer_mix_in[f].L;
+                            mix->frame[f].R = buffer_mix_in[f].R;
+                        }
+                        if (mix->frame[f].L > data->levelLeft) data->levelLeft = mix->frame[f].L;
+                        if (mix->frame[f].R > data->levelRight) data->levelRight = mix->frame[f].R;
                     }
                     data->mix_del_list.append(mix);
                     mix_track_Hor_Vert[data->myIndex][i].mix_send_list.append(mix);
-                }
-            } }
-    };
+                } }
+        }
+    }
 };
 
 
@@ -187,7 +207,7 @@ offLineMixer *offLineMixers[nbInstruMax];
 
 #define positionBegin loop_begin
 #define positionEnd loop_end
-#define title "Remyxer 1.11"
+#define title "Remyxer 1.12"
 
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWindow)
@@ -952,6 +972,7 @@ int MainWindow::Callback(const void *input,
         data->buffer_in[i].R = *in++ * data->G_In;
     }
 
+
     if ((data->mode != Playback) && (data->mode != trackOff)) { // Here is when not playing back this track
         if ((data->mode == Record) && Recording) data->recorded = true;   // set recorded flag if record is active
         for (quint64 i = 0; i < data->thisRead; i++) {
@@ -972,32 +993,17 @@ int MainWindow::Callback(const void *input,
                     data->buffer_in[i].L += pa_data[n].wavRecord[(data->position) + i] * g;
                     data->buffer_in[i].R = data->buffer_in[i].L;
                 } } }
-        } }
-    else {
-        // Here it is when playback mode for this track is selected
-        // playback wav of other tracks if wav was recorded
+        }
+    }
+    else if (!Paused) {
+        // Here it is when playback mode for this track is selected, set buffer with my track before 3D and reverbe processing
+        float g = pa_data[data->myIndex].G_Play;
         for (quint64 i = 0; i < data->thisRead; i++) {
-            data->buffer_in[i].L = 0;
-            data->buffer_in[i].R = 0; }
-            // add playback from All tracks
-            for (int n=0; n<nbInstru; n++) {
-                for (quint64 i = 0; i < data->thisRead; i++) {
-                    if ((mixEnabled || (n == data->myIndex)) && (pa_data[n].wavRecord != nullptr) && (pa_data[n].mode == Playback) && (pa_data[n].mixEnabled || (n == data->myIndex)))
-                    {
-                        // add recorded wav of my track when in playback mode
-                        if (n == data->myIndex && (!Paused)) {
-                            float g = pa_data[n].G_Play;
-                                data->buffer_in[i].L += data->wavRecord[data->position + i] * g;
-                                data->buffer_in[i].R = data->buffer_in[i].L;
-                        }
-                        else {
-                            // add other tracks recorded wav when in playback mode, but only if tracks are not in runing mode
-                            // meaning no outpur device is selected
-                            if(!pa_data[n].runing && (!Paused)) {
-                                    float g = pa_data[n].mixGain[data->myIndex];
-                                    data->buffer_in[i].L += pa_data[n].wavRecord[data->position + i] * g;
-                                    data->buffer_in[i].R = data->buffer_in[i].L; } } } } } }
-    //CMonoBuffer<float> buffer3D(thisRead);
+            data->buffer_in[i].L = data->wavRecord[data->position + i] * g;
+            data->buffer_in[i].R = data->buffer_in[i].L;
+        } }
+
+    // Process 3D sound & reverb
     data->buffer3D.Fill(data->thisRead, 0);
     for (quint64 i = 0; i < data->thisRead; i++) { data->buffer3D[i] = data->buffer_in[i].L; }
     if (data->sound3D && sound3DActive && (data->thisRead == FRAME_SIZE)) {
@@ -1014,9 +1020,11 @@ int MainWindow::Callback(const void *input,
                 sf_reverb_process(data->rv, intFrameCount , data->reverb3Din, data->reverb3Dout);
         }
     }
+
     // process reverb to input buffer
     else if (data->mode != trackOff) sf_reverb_process(data->rv, intFrameCount , data->buffer_in, data->buffer_out);
     data->buffer3D.clear();
+
     // Create new frames and copy one new frame to each other tracks with apropriate gain
     // if mix enabled copy input buffer to all other output mix matrix with its specific gain
     if (mixEnabled && data->mixEnabled) {
@@ -1047,6 +1055,8 @@ int MainWindow::Callback(const void *input,
                 data->mix_del_list.append(mix);
                 mix_track_Hor_Vert[data->myIndex][n].mix_send_list.append(mix);
             } else qDebug() << "mix overflow";  } } } }
+
+
     // This section handle the pause mode
     if (Paused) {
         // Get input buffer
@@ -1098,9 +1108,11 @@ int MainWindow::Callback(const void *input,
                     mix_track_Hor_Vert[n][data->myIndex].mix_send_list.takeFirst(); } } }
         // remove one frames of each track if available
         for (int n = 0; n < nbInstru; n++) {
-                while (mix_track_Hor_Vert[n][data->myIndex].mix_send_list.count() > 100) mix_track_Hor_Vert[n][data->myIndex].mix_send_list.removeFirst(); }
+                while (mix_track_Hor_Vert[n][data->myIndex].mix_send_list.count() > 180) mix_track_Hor_Vert[n][data->myIndex].mix_send_list.removeFirst(); }
         return paContinue;
     }
+
+
     // This section handle the main wav file sound and add the mixed data
     // if track is off, zero the buffer
     if (data->mode == trackOff) {
@@ -1114,8 +1126,6 @@ int MainWindow::Callback(const void *input,
         float L = 0;
         float R = 0;
         if ((data->position + i) <Frames) {
-        //float L = wav_st[data->position + i].L * data->G_Wav * !muteState;
-        //float R = wav_st[data->position + i].R * data->G_Wav * !muteState;
         L = wav_st[data->position + i].L * data->G_Wav * !muteState;
         R = wav_st[data->position + i].R * data->G_Wav * !muteState;
         }
@@ -1175,11 +1185,13 @@ int MainWindow::Callback(const void *input,
             while (mix_track_Hor_Vert[n][data->myIndex].mix_send_list.count() > 100) mix_track_Hor_Vert[n][data->myIndex].mix_send_list.removeFirst();
     }
 
-    if (data->handle3DMix && mixEnabled && sound3DActive && (data->thisRead == FRAME_SIZE)) {
+    //if (data->handle3DMix && mixEnabled && sound3DActive && (data->thisRead == FRAME_SIZE)) {
+    if (data->handle3DMix && mixEnabled && (data->thisRead == FRAME_SIZE)) {
         for (int n=0; n<nbInstru; n++) {
             if (n != data->myIndex) {
             // Conditions : Track not runing (no device output), it must have 3D sound active, being in Playbackmode, have wav data and mixer enabled
-                if (pa_data[n].sound3D && (pa_data[n].wavRecord != nullptr) && (!pa_data[n].runing) && (pa_data[n].mode == Playback) && pa_data[n].mixEnabled) {
+                //if (pa_data[n].sound3D && (pa_data[n].wavRecord != nullptr) && (!pa_data[n].runing) && (pa_data[n].mode == Playback) && pa_data[n].mixEnabled) {
+                if ((pa_data[n].wavRecord != nullptr) && (!pa_data[n].runing) && (pa_data[n].mode == Playback) && pa_data[n].mixEnabled) {
                     offLineMixers[n]->position = data->position;
                     offLineMixers[n]->start();
                 }
@@ -1241,12 +1253,14 @@ void MainWindow::play()
                 rec = true; }
             }
         ui->buttonSave->setEnabled(rec);
+        ui->comboBoxRecentFiles->setEnabled(true);
     }
     else
     {
             Recording = false;
             ui->buttonPlay->setChecked(true);
             ui->buttonRecord->setChecked(false);
+            ui->comboBoxRecentFiles->setEnabled(false);
     }
 }
 
@@ -1317,6 +1331,8 @@ void MainWindow::ON()
     ui->buttonRecord->setEnabled(true);
     ui->buttonHP->setChecked(false);
     ui->buttonHP->setEnabled(true);
+    //ui->comboBoxRecentFiles->setEnabled(true);
+
     bool rec = false;
     bool firstDevice = true;
     for (int n=0; n<nbInstru; n++) {
@@ -1344,7 +1360,7 @@ void MainWindow::ON()
     }
     if (none) return;
     //ui->buttonLoad->setEnabled(false);
-    ui->comboBoxRecentFiles->setEnabled(false);
+    //ui->comboBoxRecentFiles->setEnabled(false);
     ui->buttonSave->setEnabled(false);
     ui->radioButton44->setEnabled(false);
     ui->radioButton48->setEnabled(false);
@@ -2166,6 +2182,7 @@ void MainWindow::setFile(QString str)
         }
     }
     setRecentList();
+    setFocus();
 }
 
 
@@ -2356,7 +2373,7 @@ void MainWindow::stop()
         for (int n=0; n<nbInstru; n++) pa_data[n].position = 0;
         ui->buttonRecord->setEnabled(false);
         //ui->buttonLoad->setEnabled(true);
-        ui->comboBoxRecentFiles->setEnabled(true);
+        //ui->comboBoxRecentFiles->setEnabled(true);
         ui->buttonSave->setEnabled(true);
         ui->radioButton44->setEnabled(true);
         ui->radioButton48->setEnabled(true);
@@ -2389,12 +2406,13 @@ void MainWindow::stop()
     }
     ui->buttonRecord->setEnabled(rec);
     //ui->buttonLoad->setEnabled(true);
-    ui->comboBoxRecentFiles->setEnabled(true);
+    //ui->comboBoxRecentFiles->setEnabled(true);
     ui->buttonSave->setEnabled(true);
     ui->radioButton44->setEnabled(true);
     ui->radioButton48->setEnabled(true);
     ui->spinBoxLatency->setEnabled(true);
     ui->spinBoxFrameSize->setEnabled(true);
+    ui->comboBoxRecentFiles->setEnabled(true);
 
     Pa_Terminate();
     Runing = false;

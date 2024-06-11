@@ -280,7 +280,7 @@
     <item row="0" column="0">
      <widget class="QComboBox" name="comboBoxRecentFiles">
       <property name="focusPolicy">
-       <enum>Qt::ClickFocus</enum>
+       <enum>Qt::NoFocus</enum>
       </property>
      </widget>
     </item>
@@ -665,7 +665,7 @@
           <enum>Qt::NoFocus</enum>
          </property>
          <property name="toolTip">
-          <string>3D Room Reverb</string>
+          <string>3D Room Profile</string>
          </property>
          <property name="text">
           <string/>
