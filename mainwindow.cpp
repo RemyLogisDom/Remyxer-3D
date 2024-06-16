@@ -806,7 +806,7 @@ void MainWindow::loadConfig()
         bool S3D = settings.value(QString("/sound3D/%1").arg(n+1)).toBool();
         if (S3D) { sound3D[n]->setCheckState(Qt::Checked); pa_data[n].sound3D = true; }
 
-        bool R3D = settings.value(QString("/sound3D/%1").arg(n+1)).toBool();
+        bool R3D = settings.value(QString("/reverb3D/%1").arg(n+1)).toBool();
         if (R3D) { reverb3D[n]->setCheckState(Qt::Checked); pa_data[n].reverb3D = true; }
 
         str = settings.value(QString("/3DXPos/%1").arg(n+1)).toString();
@@ -984,7 +984,8 @@ int MainWindow::Callback(const void *input,
             } }
             // when runing record or not (not playing back this track), in any case (record or not)
             // add playback from other tracks if target track is not running, otherwise mix will be added by the mix array
-            if (mixEnabled && data->mixEnabled && (!Paused)) {
+            // NOT NEEDED ANY MORE SINCE THREAD IS DOING THAT JOB
+            /*if (mixEnabled && data->mixEnabled && (!Paused)) {
             for (int n=0; n<nbInstru; n++) {
                 float g = 0;
                 if (n == data->myIndex) g = 0;
@@ -992,7 +993,8 @@ int MainWindow::Callback(const void *input,
                 if ((!pa_data[n].runing) && (g > 0)) {
                     data->buffer_in[i].L += pa_data[n].wavRecord[(data->position) + i] * g;
                     data->buffer_in[i].R = data->buffer_in[i].L;
-                } } }
+                } }
+            }*/
         }
     }
     else if (!Paused) {
